@@ -43,7 +43,7 @@
 #include "../../driver/platform.h"
 #include "../../driver/sync.h"
 #include "../bridge.h"
-#include "../openhouse_room.h"
+#include "../../common/openhouse_room.h"
 #include "monado_link.h"
 #include "steamvr_tree.h"
 

@@ -19,6 +19,7 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -26,6 +27,7 @@
 #include <thread>
 #include <vector>
 
+#include "../common/openhouse_room.h"
 #include "../common/qlhs_status.h"
 #include "MinHook.h"
 #include "gravity.h"
@@ -475,6 +477,8 @@ class Provider : public vr::IServerTrackedDeviceProvider {
   HANDLE map_ = nullptr;
   unsigned tick_ = 0;
   std::string dir_;
+  bool room_ours_ = false;  // Stations(): openhouse's room was there last time
+  std::string room_id_;     // Stations(): the openhouse room last seen
   std::unique_ptr<HeadsetLink> link_;
   std::atomic<bool> run_{false};
   std::thread worker_;
@@ -593,8 +597,67 @@ class Provider : public vr::IServerTrackedDeviceProvider {
         break;
       }
     }
+    OurRoom();
     g_sync->SetStationsRaw(raw);
     g_sync->SetChannels(chans);
+  }
+
+  // openhouse (a replacement lighthouse driver) publishes its room (openhouse_room.h): whether its base stations have
+  // stopped moving, and when they moved. With it, sightings wait while the room settles and the older ones are dropped
+  // when a station moves; without (the stock driver), as before. The stations' places still come from the runtime's
+  // devices, which openhouse reports in the same raw frame.
+  void OurRoom() {
+    openhouse_room r;
+    bool ours = ReadOurRoom(r);
+    if (ours != room_ours_) {
+      room_ours_ = ours;
+      Log(ours ? Fmt("openhouse room %s: sightings follow its settling", r.room) : "no openhouse room: stock driver");
+    }
+    if (!ours) {
+      g_sync->SetRoomSource(false, true, 0);
+      return;
+    }
+    g_sync->SetRoomSource(true, r.settled != 0, r.epoch);
+    // A different room (reset from openhouse's settings, its room file deleted, or the stations moved enough to start
+    // over): what was learned against the old one is wrong, so start over. Remembered across runs, so a room reset
+    // while we weren't running counts too.
+    const std::string id(r.room, strnlen(r.room, sizeof r.room));
+    if (!id.empty() && id != room_id_) {
+      const std::string path = dir_ + "\\openhouse_room.txt";
+      if (room_id_.empty()) {
+        std::ifstream in(path);
+        std::getline(in, room_id_);
+      }
+      if (!room_id_.empty() && id != room_id_) {
+        Log(Fmt("openhouse room changed (%s -> %s): recalibrating", room_id_.c_str(), id.c_str()));
+        g_sync->ForceRecalibrate();
+      }
+      room_id_ = id;
+      std::ofstream(path) << id << "\n";
+    }
+  }
+
+  // openhouse's room, if its driver is running and has written it lately (seqlock: an odd seq is a write under way)
+  static bool ReadOurRoom(openhouse_room &out) {
+    HANDLE h = OpenFileMappingW(FILE_MAP_READ, FALSE, OPENHOUSE_ROOM_WIN_NAME);
+    if (!h) return false;
+    void *m = MapViewOfFile(h, FILE_MAP_READ, 0, 0, sizeof(openhouse_room));
+    CloseHandle(h);
+    if (!m) return false;
+    const openhouse_room *r = (const openhouse_room *)m;
+    volatile LONG *seq = (volatile LONG *)&r->seq;
+    bool ok = false;
+    for (int tries = 0; tries < 8 && !ok; tries++) {
+      LONG s = InterlockedCompareExchange(seq, 0, 0);  // a full barrier: no read below moves above it
+      if (s & 1) { Sleep(0); continue; }
+      memcpy(&out, r, sizeof out);
+      MemoryBarrier();
+      ok = InterlockedCompareExchange(seq, 0, 0) == s;
+    }
+    UnmapViewOfFile(m);
+    if (!ok || out.magic != OPENHOUSE_ROOM_MAGIC || out.version != OPENHOUSE_ROOM_VERSION) return false;
+    out.room[sizeof out.room - 1] = 0;
+    return GetTickCount64() / 1000.0 - out.beat < 2.0;
   }
 
   void Commands() {
