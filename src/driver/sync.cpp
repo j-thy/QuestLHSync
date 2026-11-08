@@ -3184,7 +3184,7 @@ void Sync::Use(const Shot &f) {
     prev = big;
   }
   if (still) { spots_.still += nb; return; }
-  if (room_ours_ && !room_settled_) { spots_.unsettled += nb; return; }
+  if (room_ours_ && !room_settled_ && !room_gave_up_) { spots_.unsettled += nb; return; }
   M3 Rc;
   V3 tc;
   if (have_lag && w <= kWmax && optics_.Pose(cam, Rc, tc)) solver_.AddFrame(t, hg, cam, p + R * tc, R * Rc);
@@ -3517,7 +3517,14 @@ Transform Sync::Tick(double now) {
       }
       if (!room_settled_ != room_waiting_) {
         room_waiting_ = !room_settled_;
+        room_wait_since_ = now;
+        room_gave_up_ = false;
         log_(room_waiting_ ? "openhouse room settling: sightings wait" : "openhouse room settled");
+      }
+      if (room_waiting_ && !room_gave_up_ && now - room_wait_since_ > kRoomWaitMax) {
+        room_gave_up_ = true;
+        log_(Fmt("openhouse room still settling after %.0f s (a base station heard from but never placed?): sightings "
+                 "used anyway", kRoomWaitMax));
       }
     }
     std::map<std::string, std::pair<V3, M3>> raw;
