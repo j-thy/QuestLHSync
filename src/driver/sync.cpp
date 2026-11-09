@@ -384,13 +384,27 @@ void Clock::AddArrival(double pc, double hs) {
   if (it == env_.end() || d < it->second.d) { env_[k] = {hs, d, 0}; dirty_ = true; }
 }
 
-void Clock::AddPing(double pc_send, double pc_recv, double hs) {
+// a round trip this far (s, plus its own RTT) off the fit is no jitter: the headset's clock jumped
+static constexpr double kClockJump = 0.25;
+
+double Clock::AddPing(double pc_send, double pc_recv, double hs) {
   double rtt = pc_recv - pc_send, d = (pc_send + pc_recv) / 2 - hs;
-  if (rtt < 0 || rtt > 1.0) return;
+  if (rtt < 0 || rtt > 1.0) return 0;
+  double jump = 0;
+  if (dirty_) Fit();
+  if (has_ && env_.size() >= 3) {  // a fit of fewer is its lowest offset, a slow first round trip's maybe
+    double off = d - (a_ * (hs - x0_) + b_);
+    if (std::fabs(off) > kClockJump + rtt) {  // fitted with the new ones, the old ones would put frames off every pose
+      jump = off;
+      env_.clear();
+      has_ = false;
+    }
+  }
   long long k = (long long)std::floor(hs / 10);
   auto it = env_.find(k);
   if (it == env_.end() || rtt < it->second.rtt) { env_[k] = {hs, d, rtt}; dirty_ = true; }
   rtt_ = rtt_ <= 0 ? rtt : 0.9 * rtt_ + 0.1 * rtt;
+  return jump;
 }
 
 void Clock::Fit() {
@@ -2852,6 +2866,19 @@ bool Sync::SetCalibration(const std::string &json, std::string *err) {
   grid_ = FrameGrid(grid_quest_);
   grid_logged_.clear();
   return true;
+}
+
+void Sync::OnPing(double pc_send, double pc_recv, double hs) {
+  double jump;
+  {
+    std::lock_guard<std::mutex> g(net_);
+    jump = clock_.AddPing(pc_send, pc_recv, hs);
+    if (jump != 0) {  // the frame grid's phases were on the old clock too (as HeadsetReset)
+      grid_ = FrameGrid(grid_quest_);
+      grid_logged_.clear();
+    }
+  }
+  if (jump != 0) log_(Fmt("headset clock jumped %+.1f s against the PC's (it slept): its clock synced anew", jump));
 }
 
 void Sync::HeadsetReset() {

@@ -193,7 +193,9 @@ class FrameGrid {
 class Clock {
  public:
   void AddArrival(double pc, double hs);                      // arrival low envelope (old logs)
-  void AddPing(double pc_send, double pc_recv, double hs);   // round trip: offset at its middle, min RTT wins
+  // round trip: offset at its middle, min RTT wins. Returns how far (s) the headset's clock jumped against the fit,
+  // when it did (it slept: its monotonic clock stops in suspend) and the older round trips were forgotten; else 0
+  double AddPing(double pc_send, double pc_recv, double hs);
   bool Map(double hs, double &pc);
   double rtt() const { return rtt_; }
   void Clear() { env_.clear(); has_ = false; dirty_ = false; rtt_ = 0; }
@@ -494,7 +496,7 @@ class Sync {
   // headset
   bool SetCalibration(const std::string &json, std::string *err);
   void OnLine(double pc, const char *line);                         // lhsight lines
-  void OnPing(double pc_send, double pc_recv, double hs) { std::lock_guard<std::mutex> g(net_); clock_.AddPing(pc_send, pc_recv, hs); }
+  void OnPing(double pc_send, double pc_recv, double hs);
   void HeadsetReset();                                              // new connection: new clock, grid
   // SteamVR
   void OnHmdPose(double t, const Quat &q, V3 p);
