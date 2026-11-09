@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
@@ -121,6 +122,9 @@ constexpr double kBodyMoved = 2.0, kBodyCorr = 0.2;  // m, correlation
 // than kHeightTol off it takes over only with the worn devices for it, and a current fit that far off gives way to a
 // candidate at it. (Wrong fits come back alike, so candidates agreeing on a new height say nothing of the floor.)
 constexpr double kHeightBin = 0.05, kHeightTol = 0.2, kHeightKeep = 120.0;  // m, m, s
+// after the headset slept: how close (m) a far candidate must be to the height the fit held, and how long (s) it held
+// it, to be taken on the plain bar (Solver::brk_h_)
+constexpr double kWakeHeightTol = 0.05, kWakeHeld = 10.0;
 // an HMD pose break across less than this is the headset space moving (a floor set anew moves the kept height with it);
 // across more, the floor may have been set anew while the poses stopped (the boundary redone), and the kept height is
 // forgotten
@@ -425,6 +429,13 @@ class Solver {
   int amb_state_ = 0;        // the mirror check's last outcome, logged when it changes
   double kept_said_ = -1e18;  // the last log of a far acquisition the worn devices turned down
   std::map<int, double> held_h_;  // s the fit held each height (kHeightBin steps), locked and pinned
+  // the fit's height before a break of unknown height (the headset slept), if it was locked at it for kWakeHeld s
+  // running: a wake turns and slides the headset space but keeps its floor, so the first far candidate within
+  // kWakeHeightTol of it takes the plain bar (fits with the stations swapped sit 0.1-0.2 m off when they hang at about
+  // one height); NAN: none, or used
+  double brk_h_ = NAN;
+  int lock_bin_ = INT_MIN;  // the height bin the fit is locked at, and for how long (s), running
+  double lock_held_ = 0;
   double held_t_ = -1e18;         // the Step that last added to it
   bool KeptHeight(double &h) const;  // the most-held height, once held kHeightKeep s
 
