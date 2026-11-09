@@ -6,6 +6,7 @@
 		"anyHmd" : false,
 		"record" : false,
 		"gravity" : true,
-		"steadyStations" : true
+		"steadyStations" : true,
+		"minSightingElevation" : -20.0
 	}
 }

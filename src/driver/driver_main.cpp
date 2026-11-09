@@ -517,6 +517,8 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     bool steady = s->GetBool(kSection, "steadyStations", &e);  // base station moves averaged (relations.h); on unset
     steady_ = e != vr::VRSettingsError_None || steady;
     g_rel->SetEnabled(steady_);
+    float min_el = s->GetFloat(kSection, "minSightingElevation", &e);  // deg below the horizon; kMinElevationDeg unset
+    if (g_sync) g_sync->SetMinElevation(e == vr::VRSettingsError_None ? min_el : kMinElevationDeg);
     bool rec = s->GetBool(kSection, "record", &e);
     SetRecording(e == vr::VRSettingsError_None && rec);
   }

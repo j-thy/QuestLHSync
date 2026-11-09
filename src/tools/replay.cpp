@@ -1,6 +1,6 @@
 // qlhs_replay: run a QuestLHSync recording through the driver's Sync, as if live.
 //   qlhs_replay <log> --calib <camera calibration json> --dir <state dir> [--out file] [--learn] [--expo s]
-//               [--learn-grid] [--pings]
+//               [--learn-grid] [--pings] [--min-elev deg]
 // Logs without clock round trips use the arrival envelope clock and EXPO 0.020. --pings: the round trips alone, like the
 // live driver (QuestLHSync recordings have them).
 // --learn: round-trip-less logs still learn the timing (starting from --expo), to test the estimator.
@@ -20,7 +20,7 @@
 int main(int argc, char **argv) {
   std::string log, calib, dir, outp, xfp;
   bool learn = false, learn_grid = false, pings = false;
-  double expo = -1;
+  double expo = -1, min_elev = kMinElevationDeg;
   std::map<std::string, int> chans;
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
@@ -37,9 +37,10 @@ int main(int argc, char **argv) {
     else if (a == "--learn") learn = true;
     else if (a == "--learn-grid") learn_grid = true;
     else if (a == "--pings") pings = true;
+    else if (a == "--min-elev" && i + 1 < argc) min_elev = atof(argv[++i]);  // deg, as minSightingElevation
     else log = a;
   }
-  if (log.empty() || calib.empty()) { fprintf(stderr, "usage: qlhs_replay <log> --calib file --dir statedir [--out f] [--learn] [--expo s]\n"); return 2; }
+  if (log.empty() || calib.empty()) { fprintf(stderr, "usage: qlhs_replay <log> --calib file --dir statedir [--out f] [--learn] [--expo s] [--min-elev deg]\n"); return 2; }
   std::ifstream cf(calib, std::ios::binary);
   std::stringstream ss;
   ss << cf.rdbuf();
@@ -52,6 +53,7 @@ int main(int argc, char **argv) {
   cfg.learn_grid = learn_grid;
   Sync sync(cfg, logfn);
   if (expo >= 0) sync.ForceExpo(expo);
+  sync.SetMinElevation(min_elev);
   sync.SetStreamer("replay");
   sync.SetChannels(chans);
   std::string err;
