@@ -878,6 +878,9 @@ void Solver::Clear() {
   amb_state_ = 0;
   kept_said_ = -1e18;
   held_h_.clear();  // another headset, or a reference frame pinned anew: the height held means nothing now
+  brk_h_ = NAN;
+  lock_bin_ = INT_MIN;
+  lock_held_ = 0;
   held_t_ = -1e18;
 }
 
@@ -1673,10 +1676,14 @@ void Solver::PoseBreak(double t, double dy) {
   // the headset space moved up dy (a floor set anew): the fit's height goes with it; by an unknown height (NAN), the
   // height held means nothing now
   if (std::isnan(dy)) {
+    brk_h_ = has_x_ && lock_held_ >= kWakeHeld && std::lround(x_[2] / kHeightBin) == lock_bin_ ? x_[2] : NAN;
+    lock_bin_ = INT_MIN;
+    lock_held_ = 0;
     held_h_.clear();
     held_t_ = -1e18;
     return;
   }
+  if (!std::isnan(brk_h_)) brk_h_ += dy;
   int d = (int)std::lround(dy / kHeightBin);
   if (d) {
     std::map<int, double> h;
@@ -2263,6 +2270,11 @@ StepStat Solver::Step(double /*now*/) {
     double dt = std::min(now - held_t_, 2.0);
     if (dt > 0) held_h_[(int)std::lround(x_[2] / kHeightBin)] += dt;
   }
+  {  // how long it has been locked at its height, pinned or not (brk_h_)
+    int bin = has_x_ ? (int)std::lround(x_[2] / kHeightBin) : INT_MIN;
+    if (!has_x_ || !locked || bin != lock_bin_) { lock_bin_ = has_x_ && locked ? bin : INT_MIN; lock_held_ = 0; }
+    else lock_held_ += std::min(now - held_t_, 2.0);
+  }
   held_t_ = now;
   if (locked && sz.size() >= 200 && sz.size() >= 4u * big) {
     std::nth_element(sz.begin(), sz.begin() + sz.size() * 9 / 10, sz.end());
@@ -2293,8 +2305,12 @@ StepStat Solver::Step(double /*now*/) {
       std::string how;
       bool far = has_x_ && !acq_forced_ && Apart(xa, x_, S) > 1.0;
       int fav = far ? BodyFavours(xa, x_, dn, dc, how) : 0;
-      int need = far && !fav ? 2 * ACQ : ACQ;
+      // after the headset slept, a candidate at the height the fit held takes the plain bar (brk_h_): the space it
+      // moved in keeps its floor
+      bool at_brk_h = !std::isnan(brk_h_) && std::fabs(xa[2] - brk_h_) <= kWakeHeightTol;
+      int need = far && !fav && !at_brk_h ? 2 * ACQ : ACQ;
       bool enough = sa >= k * need || tight >= k * TIGHT_N || (acq_forced_ && sa >= k * ACQ / 2);
+      bool by_brk_h = far && !fav && at_brk_h && sa < k * 2 * ACQ && tight < k * TIGHT_N && !acq_forced_;
       // The height decides first: a candidate off the kept height doesn't take over without the worn devices for it
       // (lamps line up with a wrong alignment at any height; a head that sat still leaves the held fit's thinned
       // support a handful), and if a wrong fit got in, one at the kept height takes it back on plain support
@@ -2324,12 +2340,14 @@ StepStat Solver::Step(double /*now*/) {
                    xa[0] * kDeg, sa, cur, how.c_str()));
         }
       } else {
-        log_(Fmt("acquired: yaw %+.2f deg t [%.3f %.3f %.3f] support %d (%d within %.1f deg, was %d)%s%s%s",
+        log_(Fmt("acquired: yaw %+.2f deg t [%.3f %.3f %.3f] support %d (%d within %.1f deg, was %d)%s%s%s%s",
                  xa[0] * kDeg, xa[1], xa[2], xa[3], sa, tight, TIGHT_DEG, cur,
                  acq_forced_ ? ", by the mirror check" : "", back ? ", back at the height the fit has held" : "",
-                 cur_lamp ? (", the old fit had " + lamp_c + " on a lamp").c_str() : ""));
+                 cur_lamp ? (", the old fit had " + lamp_c + " on a lamp").c_str() : "",
+                 by_brk_h ? ", at the height held before the headset slept" : ""));
         Reset(xa);
         since_ = brk_;
+        brk_h_ = NAN;  // a help for the first fit after the wake only
       }
     }
   }
