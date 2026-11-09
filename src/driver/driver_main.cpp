@@ -478,6 +478,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
   unsigned tick_ = 0;
   std::string dir_;
   bool room_ours_ = false;  // Stations(): openhouse's room was there last time
+  bool room_named_ = false; // ... and its name has been logged (openhouse names it on the first base station)
   std::string room_id_;     // Stations(): the openhouse room last seen
   std::unique_ptr<HeadsetLink> link_;
   std::atomic<bool> run_{false};
@@ -613,7 +614,12 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     bool ours = ReadOurRoom(r);
     if (ours != room_ours_) {
       room_ours_ = ours;
-      Log(ours ? Fmt("openhouse room %s: sightings follow its settling", r.room) : "no openhouse room: stock driver");
+      room_named_ = false;
+      if (!ours) Log("no openhouse room: stock driver");
+    }
+    if (ours && !room_named_ && r.room[0]) {  // logged once openhouse has named it: it has none before a base station
+      room_named_ = true;
+      Log(Fmt("openhouse room %s: sightings follow its settling", r.room));
     }
     if (!ours) {
       g_sync->SetRoomSource(false, true, 0);
