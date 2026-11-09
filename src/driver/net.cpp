@@ -42,6 +42,12 @@ static const int kUdpPort = 47281, kTcpPort = 47280;
 // desk, awake
 static const double kQuietSwitch = 20.0;  // s
 static const double kQuietAgain = 120.0;  // s, once it gave way and came round again: nothing else answered then
+// no camera frames for kStaleFrames while the headset is in use (its poses fresh, the head moving for kStaleWorn: awake
+// and worn, so the cameras run) on a link that had frames: lhsight's hook went stale (the headset slept). The link is
+// dropped for kStaleAway, longer than lhsyncd waits without a PC before stopping lhsight (5 s), so the next connection
+// starts a fresh one; again after 30, 60, 120, then every 240 s while frames stay away
+static const double kStaleFrames = 30.0, kStaleWorn = 10.0, kStaleMaxWait = 240.0;  // s
+static const int kStaleAway = 8000;                                                // ms
 static const size_t kKnownMax = 8;        // headsets kept in the memory
 
 #ifdef _WIN32
@@ -458,7 +464,8 @@ bool HeadsetLink::Session(const Found &f) {
   connected_at_ = start;
   state_ = kConnected;
   log_((f.model.empty() ? std::string("headset") : f.model) + " at " + f.ip + ": connected");
-  bool ok = true, wrong = false, framed = false, quiet_checked = false, remembered = false;
+  bool ok = true, wrong = false, framed = false, quiet_checked = false, remembered = false, stale = false;
+  double worn_since = start;  // the headset in use (awake and worn) since: the stale-hook restart
   double quiet_after;
   {
     std::lock_guard<std::mutex> g(m_);
@@ -490,6 +497,23 @@ bool HeadsetLink::Session(const Found &f) {
       if (!SendAll(s, p)) break;
     }
     if (now - last_rx > 10) { log_("headset: nothing received for 10 s, reconnecting"); break; }
+    {
+      // frameless this long, this session (a new one gets the full wait: its lhsight may be starting), on the headset
+      // that had them; the head's motion is only looked at in the last kStaleWorn of the wait
+      double quiet = now - std::max<double>(last_frame_, start);
+      bool armed = f.ip == framed_ip_ && quiet > kStaleFrames - kStaleWorn;
+      V3 hp;
+      double ht = 0;
+      if (!armed || !sync_->poses().Latest(hp, &ht) || now - ht >= 1.0 || sync_->poses().Still(ht)) worn_since = now;
+      if (armed && quiet > kStaleFrames && now - worn_since > kStaleWorn && now >= stale_next_) {
+        stale_wait_ = stale_wait_ > 0 ? std::min(2 * stale_wait_, kStaleMaxWait) : kStaleFrames;
+        stale_next_ = now + stale_wait_;
+        log_("headset: worn but no camera frames for " + std::to_string((int)quiet) +
+             " s: restarting its camera reader (unless another connection to it stays open)");
+        stale = true;
+        break;
+      }
+    }
     fd_set rf;
     FD_ZERO(&rf);
     FD_SET(s, &rf);
@@ -532,6 +556,8 @@ bool HeadsetLink::Session(const Found &f) {
       switch (line[0]) {
         case 'F':
           last_frame_ = rx;
+          if (framed_ip_ != f.ip) framed_ip_ = f.ip;
+          stale_wait_ = stale_next_ = 0;  // frames: a later stall starts its restarts afresh
           if (!framed) {
             framed = true;
             std::lock_guard<std::mutex> g(m_);
@@ -611,5 +637,7 @@ bool HeadsetLink::Session(const Found &f) {
   }
   closesocket(s);
   state_ = kSearching;
+  if (stale)  // away long enough for lhsyncd to stop the stale lhsight
+    for (int i = 0; i < kStaleAway / 50 && run_ && wanted_; i++) Sleep(50);
   return !wrong;
 }

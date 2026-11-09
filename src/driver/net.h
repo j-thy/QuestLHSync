@@ -51,6 +51,10 @@ class HeadsetLink {
   std::atomic<bool> run_{false}, wanted_{false};
   std::atomic<State> state_{kIdle};
   std::atomic<double> last_frame_{0}, connected_at_{0};
+  // the stale-hook restart (Session): the headset that last sent frames; when it may restart lhsight next, and the
+  // wait after
+  std::string framed_ip_;
+  double stale_next_ = 0, stale_wait_ = 0;
   mutable std::mutex m_;
   std::vector<std::string> hosts_;
   std::string preferred_, serial_, model_, addr_, fw_, mem_path_, failed_ip_, family_, streamer_, skipped_;
