@@ -255,6 +255,7 @@ class App {
   QlhsStatus *st_ = nullptr;
   bridge::Shm *br_ = nullptr;
   bool room_ours_ = false;
+  bool room_named_ = false;  // ... and its name has been logged (openhouse names it on the first base station)
   std::string room_id_;  // openhouse's room the alignment belongs to
   std::unique_ptr<HeadsetLink> link_;
   std::unique_ptr<MonadoLink> monado_;
@@ -376,7 +377,12 @@ class App {
     bool ours = ReadOurRoom(r);
     if (ours != room_ours_) {
       room_ours_ = ours;
-      Log(ours ? Fmt("base stations: openhouse's room %s", r.room) : "base stations: the runtime's (no openhouse room)");
+      room_named_ = false;
+      if (!ours) Log("base stations: the runtime's (no openhouse room)");
+    }
+    if (ours && !room_named_ && r.room[0]) {  // logged once openhouse has named it: it has none before a base station
+      room_named_ = true;
+      Log(Fmt("base stations: openhouse's room %s", r.room));
     }
     if (!ours) {
       g_sync->SetRoomSource(false, true, 0);
