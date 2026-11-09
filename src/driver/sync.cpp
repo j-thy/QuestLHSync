@@ -3204,6 +3204,7 @@ void Sync::Use(const Shot &f) {
               D.y, D.z, p.x, p.y, p.z, w, b.peak);
     }
     if (w > kWmax) { spots_.fast++; continue; }
+    if ((R * d).y < min_el_sin_.load()) { spots_.low++; continue; }  // well below the horizon: not a base station
     bool bright = b.peak >= kBright;
     solver_.Add(t, p + R * o, R * d, hg, cam, bright, sr);  // dim ones too: they tell when the room is too light
     if (bright || solver_.starved()) spots_.used++;
@@ -3222,6 +3223,7 @@ std::string Sync::Describe(const Spots &a, const Spots &b) {
   part(b.other - a.other, "without a headset pose");
   part(b.dim - a.dim, "dim, kept for a room too light for the dots to saturate");
   part(b.unsettled - a.unsettled, "while openhouse's room settled");
+  part(b.low - a.low, "below minSightingElevation (lit surfaces near the floor; lower it for base stations mounted low)");
   return Fmt("%ld bright spots, %ld used", n, b.used - a.used) + (why.empty() ? "" : " (" + why + ")");
 }
 

@@ -120,6 +120,7 @@ std::string ExeDir() {
 // ---------------------------------------------------------------- settings (steamvr.vrsettings' keys)
 struct Settings {
   bool enable = true, any_hmd = false, record = false, gravity = true, steady = true;
+  double min_elevation = kMinElevationDeg;  // deg, "minSightingElevation"
   std::vector<std::string> hosts;
   std::string headset;
 };
@@ -145,6 +146,8 @@ Settings ReadSettings() {
   flag("record", s.record);
   flag("gravity", s.gravity);
   flag("steadyStations", s.steady);
+  if (const JVal *j = root.get("minSightingElevation"))
+    if (j->t == JVal::Num) s.min_elevation = j->n;
   if (const JVal *j = root.get("host"))
     if (j->t == JVal::Str) {
       std::string cur;
@@ -211,6 +214,7 @@ class App {
     cfg.dir = dir_;
     cfg.per_headset = true;
     g_sync = std::make_unique<Sync>(cfg, [](const std::string &s) { Log(s); });
+    g_sync->SetMinElevation(set_.min_elevation);
     g_gravity = std::make_unique<Gravity>(dir_, [](const std::string &s) { Log(s); });
     g_gravity->SetRecord([](double t, const std::string &s) { if (g_sync) g_sync->Rec(t, "%s", s.c_str()); });
     g_gravity->SetEnabled(set_.gravity);

@@ -129,6 +129,7 @@ Optional, in `steamvr.vrsettings` under `"driver_questlhsync"`:
 | `record` | `false` | Record every session (same as the button) |
 | `gravity` | `true` | `false` turns levelling by the lighthouse devices' accelerometers off |
 | `steadyStations` | `true` | `false` lets SteamVR move base stations by each new measurement instead of their average |
+| `minSightingElevation` | `-20` | Degrees: camera sightings pointing further below the horizon are ignored (lit surfaces near the floor, not base stations). Lower it for stations mounted below eye level; `-90` turns it off. Read at start, like the others |
 
 With a wired headset (SteamVR's headset is a lighthouse one, or tracked by a driver that isn't a streamer's: Index, Vive, Windows Mixed Reality, ...), QuestLHSync switches itself off: no corrections, no levelling, no base station averaging, and the dashboard closes. `anyHmd` keeps it on for a headset it wouldn't otherwise accept (never a lighthouse one).
 

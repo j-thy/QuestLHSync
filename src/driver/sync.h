@@ -11,6 +11,7 @@
 //   Timing    learns the frame grid -> HMD pose time offset per streamer (they report poses differently)
 //   Sync      ties them together: seeding, slewing, state files, status
 #pragma once
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -124,6 +125,12 @@ constexpr double kHeightBin = 0.05, kHeightTol = 0.2, kHeightKeep = 120.0;  // m
 // across more, the floor may have been set anew while the poses stopped (the boundary redone), and the kept height is
 // forgotten
 constexpr double kBrkJumpGap = 0.2;  // s
+
+// sightings pointing further below the horizon than this (deg) are dropped: base stations hang above the head, and
+// what the cameras see well below it is lit surfaces near the floor (a bed, a desk, devices on a case). With 1.0
+// stations, told apart by direction alone, those fit a station layout as well as the stations do and pulled whole
+// fits ~1 m low. The driver's "minSightingElevation" setting moves it (-90: off), for stations mounted low.
+constexpr double kMinElevationDeg = -20.0;
 
 double RotorPeriod(int channel);  // s, a 2.0 base station on channel 1..16, else 0
 constexpr double kUpward = 0.1;        // a camera whose axis climbs this much (of 1) looks up: the Frame's upper pair
@@ -498,6 +505,8 @@ class Sync {
   // sightings are not used (they'd be measured against stations still moving); a new epoch (a station moved) drops
   // the older sightings. Not ours: neither.
   void SetRoomSource(bool ours, bool settled, uint64_t epoch) { room_ours_ = ours; room_settled_ = settled; room_epoch_ = epoch; }
+  // deg: sightings pointing further below the horizon are dropped (kMinElevationDeg); -90 or lower: none
+  void SetMinElevation(double deg) { min_el_sin_ = deg <= -90 ? -2.0 : std::sin(std::min(90.0, deg) / kDeg); }
   void SetStreamer(const std::string &system);
   // the headset this session talks to (its serial and model from its hello): state.json is kept per headset. Safe from
   // any thread; Tick takes it up
@@ -528,7 +537,7 @@ class Sync {
   };
   Status GetStatus(double now);
   // the cameras' bright spots so far, and what became of them
-  struct Spots { long frames = 0, seen = 0, used = 0, still = 0, fast = 0, big = 0, other = 0, dim = 0, unsettled = 0; };
+  struct Spots { long frames = 0, seen = 0, used = 0, still = 0, fast = 0, big = 0, other = 0, dim = 0, unsettled = 0, low = 0; };
   Spots spots() { std::lock_guard<std::mutex> g(net_); return spots_; }
   static std::string Describe(const Spots &from, const Spots &to);
   void StationsForDump(std::vector<std::string> &keys, std::vector<V3> &S) const {  // tools
@@ -581,6 +590,7 @@ class Sync {
   // calls a room settled only once every base station it heard from this session is placed: one seen in passing and
   // never placed would hold sightings back for good otherwise
   std::atomic<bool> room_gave_up_{false};
+  std::atomic<double> min_el_sin_{std::sin(kMinElevationDeg / kDeg)};
   double room_wait_since_ = 0;  // Tick's: when the room started settling
   std::atomic<uint64_t> room_epoch_{0};
   uint64_t room_epoch_seen_ = 0;  // Tick's
