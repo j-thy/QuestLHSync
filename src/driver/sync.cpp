@@ -1654,6 +1654,8 @@ void Solver::PoseBreak(double t, double dy) {
   brk_ = since_ = std::max(since_, t);
   last_acq_ = -1e18;
   has_acq_x_ = false;
+  has_stat_ = false;  // its support was on older sightings: no lock on it until newer ones fit (a camera dead after a
+                      // sleep sends none, and Step would hand the old support back)
   // the headset space moved up dy (a floor set anew): the fit's height goes with it; by an unknown height (NAN), the
   // height held means nothing now
   if (std::isnan(dy)) {

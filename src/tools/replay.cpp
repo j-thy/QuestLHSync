@@ -131,8 +131,9 @@ int main(int argc, char **argv) {
       std::string sts;
       for (auto &e : st.st) sts += " " + e.serial + ":" + std::to_string(e.support);
       if (st.has_x)
-        printf("%6.0fs yaw %+.3f t [%.1f %.1f %.1f] cm n %d med %.3f%s%s expo %.1f ms\n", pc - t0, st.x[0] * kDeg, st.x[1] * 100,
-               st.x[2] * 100, st.x[3] * 100, st.n, st.med, sts.c_str(), st.cond ? " cond" : "", st.expo * 1000);
+        printf("%6.0fs yaw %+.3f t [%.1f %.1f %.1f] cm n %d med %.3f%s%s%s expo %.1f ms\n", pc - t0, st.x[0] * kDeg,
+               st.x[1] * 100, st.x[2] * 100, st.x[3] * 100, st.n, st.med, sts.c_str(), st.cond ? " cond" : "",
+               st.locked ? " locked" : " not locked", st.expo * 1000);
       else
         printf("%6.0fs unlocked%s\n", pc - t0, sts.c_str());
     }
