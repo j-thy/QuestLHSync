@@ -637,7 +637,9 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     }
   }
 
-  // openhouse's room, if its driver is running and has written it lately (seqlock: an odd seq is a write under way)
+  // openhouse's room, if its driver is running and has written it lately (seqlock: an odd seq is a write under way).
+  // The view is read-only: seq is read with plain loads and fences, never an interlocked operation (a locked
+  // read-modify-write needs write access even when it changes nothing, and faults on this view).
   static bool ReadOurRoom(openhouse_room &out) {
     HANDLE h = OpenFileMappingW(FILE_MAP_READ, FALSE, OPENHOUSE_ROOM_WIN_NAME);
     if (!h) return false;
@@ -645,14 +647,15 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     CloseHandle(h);
     if (!m) return false;
     const openhouse_room *r = (const openhouse_room *)m;
-    volatile LONG *seq = (volatile LONG *)&r->seq;
+    const volatile LONG *seq = (const volatile LONG *)&r->seq;
     bool ok = false;
     for (int tries = 0; tries < 8 && !ok; tries++) {
-      LONG s = InterlockedCompareExchange(seq, 0, 0);  // a full barrier: no read below moves above it
+      LONG s = *seq;
+      MemoryBarrier();  // no read below moves above it
       if (s & 1) { Sleep(0); continue; }
       memcpy(&out, r, sizeof out);
-      MemoryBarrier();
-      ok = InterlockedCompareExchange(seq, 0, 0) == s;
+      MemoryBarrier();  // the copy completes before seq is read again
+      ok = *seq == s;
     }
     UnmapViewOfFile(m);
     if (!ok || out.magic != OPENHOUSE_ROOM_MAGIC || out.version != OPENHOUSE_ROOM_VERSION) return false;
