@@ -3561,6 +3561,11 @@ Transform Sync::Tick(double now) {
           if (poses_.Latest(hp, &th)) solver_.PoseBreak(th);
           log_(Fmt("openhouse room epoch %llu: the base stations moved, older sightings dropped",
                    (unsigned long long)ep));
+          if (room_waiting_ && room_gave_up_) {  // a new room: it gets its own wait, whatever the old one took
+            room_wait_since_ = now;
+            room_gave_up_ = false;
+            log_("openhouse room settling: sightings wait");
+          }
         }
         room_epoch_seen_ = ep;
       }
