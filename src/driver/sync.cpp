@@ -879,6 +879,7 @@ void Solver::Clear() {
   kept_said_ = -1e18;
   held_h_.clear();  // another headset, or a reference frame pinned anew: the height held means nothing now
   brk_h_ = NAN;
+  has_brk_prev_ = false;
   lock_bin_ = INT_MIN;
   lock_held_ = 0;
   held_t_ = -1e18;
@@ -1667,7 +1668,7 @@ void Solver::CheckMirror(X4 &best, int &bs, const std::vector<V3> &S, const std:
 }
 
 // the HMD pose stream broke: the Quest's space may have changed under the older sightings (boundary reset)
-void Solver::PoseBreak(double t, double dy) {
+void Solver::PoseBreak(double t, double dy, double gap) {
   brk_ = since_ = std::max(since_, t);
   last_acq_ = -1e18;
   has_acq_x_ = false;
@@ -1676,7 +1677,9 @@ void Solver::PoseBreak(double t, double dy) {
   // the headset space moved up dy (a floor set anew): the fit's height goes with it; by an unknown height (NAN), the
   // height held means nothing now
   if (std::isnan(dy)) {
-    brk_h_ = has_x_ && lock_held_ >= kWakeHeld && std::lround(x_[2] / kHeightBin) == lock_bin_ ? x_[2] : NAN;
+    brk_h_ = has_x_ && gap >= kWakeGap && lock_held_ >= kWakeHeld && std::lround(x_[2] / kHeightBin) == lock_bin_
+                 ? x_[2] : NAN;
+    has_brk_prev_ = false;
     lock_bin_ = INT_MIN;
     lock_held_ = 0;
     held_h_.clear();
@@ -2307,7 +2310,15 @@ StepStat Solver::Step(double /*now*/) {
       int fav = far ? BodyFavours(xa, x_, dn, dc, how) : 0;
       // after the headset slept, a candidate at the height the fit held takes the plain bar (brk_h_): the space it
       // moved in keeps its floor
-      bool at_brk_h = !std::isnan(brk_h_) && std::fabs(xa[2] - brk_h_) <= kWakeHeightTol;
+      bool at_brk_h = far && !fav && !std::isnan(brk_h_) && std::fabs(xa[2] - brk_h_) <= kWakeHeightTol;
+      if (at_brk_h) {  // and the same candidate as the last try: one try's dozen can be other lights lined up
+        bool again = has_brk_prev_ && Apart(xa, brk_prev_, S) < 0.3;
+        brk_prev_ = xa;
+        has_brk_prev_ = true;
+        at_brk_h = again;
+      } else {
+        has_brk_prev_ = false;
+      }
       int need = far && !fav && !at_brk_h ? 2 * ACQ : ACQ;
       bool enough = sa >= k * need || tight >= k * TIGHT_N || (acq_forced_ && sa >= k * ACQ / 2);
       bool by_brk_h = far && !fav && at_brk_h && sa < k * 2 * ACQ && tight < k * TIGHT_N && !acq_forced_;
@@ -3549,7 +3560,7 @@ Transform Sync::Tick(double now) {
       // stopped): how far the headset space moved up is unknown
       double gap, dy;
       poses_.brk_jump(gap, dy);
-      solver_.PoseBreak(poses_.brk_t(), gap < kBrkJumpGap ? dy : NAN);
+      solver_.PoseBreak(poses_.brk_t(), gap < kBrkJumpGap ? dy : NAN, gap);
       log_("HMD pose break (" + poses_.brk_what() + "): older sightings dropped, acquiring");
     }
     if (room_ours_) {

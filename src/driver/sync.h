@@ -125,6 +125,9 @@ constexpr double kHeightBin = 0.05, kHeightTol = 0.2, kHeightKeep = 120.0;  // m
 // after the headset slept: how close (m) a far candidate must be to the height the fit held, and how long (s) it held
 // it, to be taken on the plain bar (Solver::brk_h_)
 constexpr double kWakeHeightTol = 0.05, kWakeHeld = 10.0;
+// ... only after the poses stopped this long (s): a sleep. A shorter loss (stepping out of the boundary) leaves the
+// stricter bar, which a wrong fit at that height met live 11 s after a 7 s loss
+constexpr double kWakeGap = 60.0;
 // an HMD pose break across less than this is the headset space moving (a floor set anew moves the kept height with it);
 // across more, the floor may have been set anew while the poses stopped (the boundary redone), and the kept height is
 // forgotten
@@ -348,7 +351,8 @@ class Solver {
   void SetFramePeriod(double p) { frame_p_ = p; }  // s between short frames
   void AddFrame(double t, double g, int cam, V3 o, const M3 &R);  // every short frame; camera pose in Quest space
   void SetInImage(std::function<bool(int cam, V3 d)> f) { in_image_ = std::move(f); }
-  void PoseBreak(double t, double dy = 0);  // dy: how far up the headset space moved (m), NAN if unknown
+  // dy: how far up the headset space moved (m), NAN if unknown; gap: how long the poses stopped (s)
+  void PoseBreak(double t, double dy = 0, double gap = 0);
   StepStat Step(double now);
   bool has_x() const { return has_x_; }
   void SetDimDots(bool on) { dim_dots_ = on; }  // see dim_dots_
@@ -436,6 +440,8 @@ class Solver {
   double brk_h_ = NAN;
   int lock_bin_ = INT_MIN;  // the height bin the fit is locked at, and for how long (s), running
   double lock_held_ = 0;
+  X4 brk_prev_{};            // the last try's candidate at brk_h_: it must come twice in a row
+  bool has_brk_prev_ = false;
   double held_t_ = -1e18;         // the Step that last added to it
   bool KeptHeight(double &h) const;  // the most-held height, once held kHeightKeep s
 
