@@ -480,6 +480,9 @@ class Provider : public vr::IServerTrackedDeviceProvider {
   bool room_ours_ = false;  // Stations(): openhouse's room was there last time
   bool room_named_ = false; // ... and its name has been logged (openhouse names it on the first base station)
   std::string room_id_;     // Stations(): the openhouse room last seen
+  std::map<std::string, std::pair<V3, M3>> room_ref_;  // Stations(): the used stations' places the sightings are against
+  uint64_t room_epoch_ = 0;                            // Stations(): bumped when one of them moves
+  double room_still_since_ = 0;                        // Stations(): since when they've held still
   std::unique_ptr<HeadsetLink> link_;
   std::atomic<bool> run_{false};
   std::thread worker_;
@@ -600,16 +603,16 @@ class Provider : public vr::IServerTrackedDeviceProvider {
         break;
       }
     }
-    OurRoom();
+    OurRoom(raw);
     g_sync->SetStationsRaw(raw);
     g_sync->SetChannels(chans);
   }
 
-  // openhouse (a replacement lighthouse driver) publishes its room (openhouse_room.h): whether its base stations have
-  // stopped moving, and when they moved. With it, sightings wait while the room settles and the older ones are dropped
-  // when a station moves; without (the stock driver), as before. The stations' places still come from the runtime's
-  // devices, which openhouse reports in the same raw frame.
-  void OurRoom() {
+  // openhouse (a replacement lighthouse driver) publishes its room (openhouse_room.h): its base stations' places, in
+  // the raw frame the runtime's devices are reported in (openhouse sets their WorldFromDriver to it). As the Linux app
+  // does: with it, the stations are openhouse's well-placed ones, sightings wait until those have held still, and one
+  // that moved drops the older sightings; without (the stock driver), the runtime's devices as before.
+  void OurRoom(std::map<std::string, std::pair<V3, M3>> &raw) {
     openhouse_room r;
     bool ours = ReadOurRoom(r);
     if (ours != room_ours_) {
@@ -625,7 +628,40 @@ class Provider : public vr::IServerTrackedDeviceProvider {
       g_sync->SetRoomSource(false, true, 0);
       return;
     }
-    g_sync->SetRoomSource(true, r.settled != 0, r.epoch);
+    // Only the well-placed stations: one openhouse is relearning (bumped, or barely seen) is placed with a large sigma
+    // and moves while it learns; with it in, its sightings were against a place still changing. openhouse's own
+    // settled/epoch cover every station, so one relearning (or heard from once and never placed) paused the alignment
+    // and dropped every sighting; here they're judged on the stations used only.
+    constexpr double kGoodSigma = 0.025;               // m
+    constexpr double kMovedM = 0.01, kMovedDeg = 0.3;  // a station this far off moved: older sightings are wrong
+    constexpr double kStillFor = 3.0;                  // s the used stations must hold still
+    std::map<std::string, std::pair<V3, M3>> own;
+    for (int i = 0; i < r.count && i < OPENHOUSE_ROOM_MAX_BASES; i++) {
+      const openhouse_room_base &b = r.bases[i];
+      if (!b.visible || !b.placed || !(b.sigma <= kGoodSigma)) continue;
+      own[std::string(b.serial, strnlen(b.serial, sizeof b.serial))] = {V3{b.p[0], b.p[1], b.p[2]},
+                                                                        ToM3(Quat{b.q[0], b.q[1], b.q[2], b.q[3]})};
+    }
+    raw = own;
+    const double now = QpcNow();
+    bool moved = false;
+    for (auto &kv : own) {
+      auto ref = room_ref_.find(kv.first);
+      if (ref == room_ref_.end()) continue;  // new to the alignment: nothing seen of it yet against another place
+      if (norm(kv.second.first - ref->second.first) > kMovedM ||
+          RotDeg(ref->second.second * T(kv.second.second)) > kMovedDeg)
+        moved = true;
+    }
+    for (auto &kv : own) room_ref_[kv.first] = kv.second;  // kept while a station drops out, to compare on return
+    if (moved) {
+      ++room_epoch_;
+      room_still_since_ = now;
+      Log(Fmt("openhouse station moved: epoch %llu", (unsigned long long)room_epoch_));
+    }
+    if (own.size() < 2) room_still_since_ = now;
+    if (room_epoch_ == 0 && own.size() >= 2) room_epoch_ = 1;
+    const bool settled = own.size() >= 2 && now - room_still_since_ >= kStillFor;
+    g_sync->SetRoomSource(true, settled, room_epoch_);
     // A different room (reset from openhouse's settings, its room file deleted, or the stations moved enough to start
     // over): what was learned against the old one is wrong, so start over. Remembered across runs, so a room reset
     // while we weren't running counts too.
