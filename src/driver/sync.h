@@ -53,7 +53,6 @@ constexpr double kTimingTurn = 10.0, kTimingSplit = 0.030;  // deg/s, s
 // recordings: 1.1-3.9 ms; a Frame's, its few sightings coming in bursts: 5-15 ms, and it keeps kExpoDefault)
 constexpr int kTimingBoot = 200;
 constexpr double kTimingCI = 0.006;  // s
-constexpr double kRoomWaitMax = 60.0;  // s openhouse's room may settle before sightings are used anyway
 constexpr int kMaxPx = 400;             // bigger blobs are lamps/windows, not a laser dot
 constexpr double kMaxSource = 0.008;    // m^2
 // lim: the dots' size learned, sr * m (0: none yet)
@@ -605,12 +604,7 @@ class Sync {
   std::atomic<long> nframes_{0};
   Spots spots_;  // under net_
   std::atomic<bool> room_ours_{false}, room_settled_{true};
-  // Tick's, read by Use: the room has been settling longer than kRoomWaitMax, so sightings are used anyway. openhouse
-  // calls a room settled only once every base station it heard from this session is placed: one seen in passing and
-  // never placed would hold sightings back for good otherwise
-  std::atomic<bool> room_gave_up_{false};
   std::atomic<double> min_el_sin_{std::sin(kMinElevationDeg / kDeg)};
-  double room_wait_since_ = 0;  // Tick's: when the room started settling
   std::atomic<uint64_t> room_epoch_{0};
   uint64_t room_epoch_seen_ = 0;  // Tick's
   bool room_waiting_ = false;     // Tick's: logged that the room is settling
