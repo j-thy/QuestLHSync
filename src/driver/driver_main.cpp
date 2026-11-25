@@ -30,6 +30,7 @@
 #include "MinHook.h"
 #include "gravity.h"
 #include "net.h"
+#include "openhouse.h"
 #include "openvr_driver.h"
 #include "relations.h"
 #include "sync.h"
@@ -326,6 +327,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     g_gravity = std::make_unique<Gravity>(dir_, [](const std::string &s) { Log(s); });
     g_gravity->SetRecord([](double t, const std::string &s) { if (g_sync) g_sync->Rec(t, "%s", s.c_str()); });
     g_rel = std::make_unique<Relations>(dir_, [](const std::string &s) { Log(s); });
+    room_ = std::make_unique<OpenhouseRoom>(dir_ + "\\openhouse_room", [](const std::string &s) { Log(s); });
     link_ = std::make_unique<HeadsetLink>(
         g_sync.get(), [](const std::string &s) { Log(s); },
         [](double t, const std::string &s) { if (g_sync) g_sync->Rec(t, "%s", s.c_str()); });
@@ -475,6 +477,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
   HANDLE map_ = nullptr;
   unsigned tick_ = 0;
   std::string dir_;
+  std::unique_ptr<OpenhouseRoom> room_;  // openhouse's base stations, while it is SteamVR's lighthouse driver
   std::unique_ptr<HeadsetLink> link_;
   std::atomic<bool> run_{false};
   std::thread worker_;
@@ -593,6 +596,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
         break;
       }
     }
+    if (room_) room_->Update(*g_sync, raw, QpcNow());
     g_sync->SetStationsRaw(raw);
     g_sync->SetChannels(chans);
   }

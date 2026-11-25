@@ -38,13 +38,10 @@ def lf(text):
 def clang():
     ndk = os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT")
     if not ndk:
-        sdk = os.environ.get("ANDROID_HOME") or (
-            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Android", "Sdk") if os.name == "nt"
-            else os.path.join(os.path.expanduser("~"), "Android", "Sdk"))
+        sdk = os.environ.get("ANDROID_HOME") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "Android", "Sdk")
         found = sorted(glob.glob(os.path.join(sdk, "ndk", "*")))
         ndk = found[-1] if found else ""
-    host = "windows-x86_64" if os.name == "nt" else "linux-x86_64"
-    exe = os.path.join(ndk, "toolchains", "llvm", "prebuilt", host, "bin", "clang.exe" if os.name == "nt" else "clang")
+    exe = os.path.join(ndk, "toolchains", "llvm", "prebuilt", "windows-x86_64", "bin", "clang.exe")
     if not os.path.exists(exe):
         sys.exit("Android NDK not found: set ANDROID_NDK_HOME")
     return exe
