@@ -19,7 +19,6 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
-#include <fstream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -27,11 +26,11 @@
 #include <thread>
 #include <vector>
 
-#include "../common/openhouse_room.h"
 #include "../common/qlhs_status.h"
 #include "MinHook.h"
 #include "gravity.h"
 #include "net.h"
+#include "openhouse.h"
 #include "openvr_driver.h"
 #include "relations.h"
 #include "sync.h"
@@ -328,6 +327,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
     g_gravity = std::make_unique<Gravity>(dir_, [](const std::string &s) { Log(s); });
     g_gravity->SetRecord([](double t, const std::string &s) { if (g_sync) g_sync->Rec(t, "%s", s.c_str()); });
     g_rel = std::make_unique<Relations>(dir_, [](const std::string &s) { Log(s); });
+    room_ = std::make_unique<OpenhouseRoom>(dir_ + "\\openhouse_room", [](const std::string &s) { Log(s); });
     link_ = std::make_unique<HeadsetLink>(
         g_sync.get(), [](const std::string &s) { Log(s); },
         [](double t, const std::string &s) { if (g_sync) g_sync->Rec(t, "%s", s.c_str()); });
@@ -477,12 +477,7 @@ class Provider : public vr::IServerTrackedDeviceProvider {
   HANDLE map_ = nullptr;
   unsigned tick_ = 0;
   std::string dir_;
-  bool room_ours_ = false;  // Stations(): openhouse's room was there last time
-  bool room_named_ = false; // ... and its name has been logged (openhouse names it on the first base station)
-  std::string room_id_;     // Stations(): the openhouse room last seen
-  std::map<std::string, std::pair<V3, M3>> room_ref_;  // Stations(): the used stations' places the sightings are against
-  uint64_t room_epoch_ = 0;                            // Stations(): bumped when one of them moves
-  double room_still_since_ = 0;                        // Stations(): since when they've held still
+  std::unique_ptr<OpenhouseRoom> room_;  // openhouse's base stations, while it is SteamVR's lighthouse driver
   std::unique_ptr<HeadsetLink> link_;
   std::atomic<bool> run_{false};
   std::thread worker_;
@@ -603,108 +598,9 @@ class Provider : public vr::IServerTrackedDeviceProvider {
         break;
       }
     }
-    OurRoom(raw);
+    if (room_) room_->Update(*g_sync, raw, QpcNow());
     g_sync->SetStationsRaw(raw);
     g_sync->SetChannels(chans);
-  }
-
-  // openhouse (a replacement lighthouse driver) publishes its room (openhouse_room.h): its base stations' places, in
-  // the raw frame the runtime's devices are reported in (openhouse sets their WorldFromDriver to it). As the Linux app
-  // does: with it, the stations are openhouse's well-placed ones, sightings wait until those have held still, and one
-  // that moved drops the older sightings; without (the stock driver), the runtime's devices as before.
-  void OurRoom(std::map<std::string, std::pair<V3, M3>> &raw) {
-    openhouse_room r;
-    bool ours = ReadOurRoom(r);
-    if (ours != room_ours_) {
-      room_ours_ = ours;
-      room_named_ = false;
-      if (!ours) Log("no openhouse room: stock driver");
-    }
-    if (ours && !room_named_ && r.room[0]) {  // logged once openhouse has named it: it has none before a base station
-      room_named_ = true;
-      Log(Fmt("openhouse room %s: sightings follow its settling", r.room));
-    }
-    if (!ours) {
-      g_sync->SetRoomSource(false, true, 0);
-      return;
-    }
-    // Only the well-placed stations: one openhouse is relearning (bumped, or barely seen) is placed with a large sigma
-    // and moves while it learns; with it in, its sightings were against a place still changing. openhouse's own
-    // settled/epoch cover every station, so one relearning (or heard from once and never placed) paused the alignment
-    // and dropped every sighting; here they're judged on the stations used only.
-    constexpr double kGoodSigma = 0.025;               // m
-    constexpr double kMovedM = 0.01, kMovedDeg = 0.3;  // a station this far off moved: older sightings are wrong
-    constexpr double kStillFor = 3.0;                  // s the used stations must hold still
-    std::map<std::string, std::pair<V3, M3>> own;
-    for (int i = 0; i < r.count && i < OPENHOUSE_ROOM_MAX_BASES; i++) {
-      const openhouse_room_base &b = r.bases[i];
-      if (!b.visible || !b.placed || !(b.sigma <= kGoodSigma)) continue;
-      own[std::string(b.serial, strnlen(b.serial, sizeof b.serial))] = {V3{b.p[0], b.p[1], b.p[2]},
-                                                                        ToM3(Quat{b.q[0], b.q[1], b.q[2], b.q[3]})};
-    }
-    raw = own;
-    const double now = QpcNow();
-    bool moved = false;
-    for (auto &kv : own) {
-      auto ref = room_ref_.find(kv.first);
-      if (ref == room_ref_.end()) continue;  // new to the alignment: nothing seen of it yet against another place
-      if (norm(kv.second.first - ref->second.first) > kMovedM ||
-          RotDeg(ref->second.second * T(kv.second.second)) > kMovedDeg)
-        moved = true;
-    }
-    for (auto &kv : own) room_ref_[kv.first] = kv.second;  // kept while a station drops out, to compare on return
-    if (moved) {
-      ++room_epoch_;
-      room_still_since_ = now;
-      Log(Fmt("openhouse station moved: epoch %llu", (unsigned long long)room_epoch_));
-    }
-    if (own.size() < 2) room_still_since_ = now;
-    if (room_epoch_ == 0 && own.size() >= 2) room_epoch_ = 1;
-    const bool settled = own.size() >= 2 && now - room_still_since_ >= kStillFor;
-    g_sync->SetRoomSource(true, settled, room_epoch_);
-    // A different room (reset from openhouse's settings, its room file deleted, or the stations moved enough to start
-    // over): what was learned against the old one is wrong, so start over. Remembered across runs, so a room reset
-    // while we weren't running counts too.
-    const std::string id(r.room, strnlen(r.room, sizeof r.room));
-    if (!id.empty() && id != room_id_) {
-      const std::string path = dir_ + "\\openhouse_room.txt";
-      if (room_id_.empty()) {
-        std::ifstream in(path);
-        std::getline(in, room_id_);
-      }
-      if (!room_id_.empty() && id != room_id_) {
-        Log(Fmt("openhouse room changed (%s -> %s): recalibrating", room_id_.c_str(), id.c_str()));
-        g_sync->ForceRecalibrate();
-      }
-      room_id_ = id;
-      std::ofstream(path) << id << "\n";
-    }
-  }
-
-  // openhouse's room, if its driver is running and has written it lately (seqlock: an odd seq is a write under way).
-  // The view is read-only: seq is read with plain loads and fences, never an interlocked operation (a locked
-  // read-modify-write needs write access even when it changes nothing, and faults on this view).
-  static bool ReadOurRoom(openhouse_room &out) {
-    HANDLE h = OpenFileMappingW(FILE_MAP_READ, FALSE, OPENHOUSE_ROOM_WIN_NAME);
-    if (!h) return false;
-    void *m = MapViewOfFile(h, FILE_MAP_READ, 0, 0, sizeof(openhouse_room));
-    CloseHandle(h);
-    if (!m) return false;
-    const openhouse_room *r = (const openhouse_room *)m;
-    const volatile LONG *seq = (const volatile LONG *)&r->seq;
-    bool ok = false;
-    for (int tries = 0; tries < 8 && !ok; tries++) {
-      LONG s = *seq;
-      MemoryBarrier();  // no read below moves above it
-      if (s & 1) { Sleep(0); continue; }
-      memcpy(&out, r, sizeof out);
-      MemoryBarrier();  // the copy completes before seq is read again
-      ok = *seq == s;
-    }
-    UnmapViewOfFile(m);
-    if (!ok || out.magic != OPENHOUSE_ROOM_MAGIC || out.version != OPENHOUSE_ROOM_VERSION) return false;
-    out.room[sizeof out.room - 1] = 0;
-    return GetTickCount64() / 1000.0 - out.beat < 2.0;
   }
 
   void Commands() {
